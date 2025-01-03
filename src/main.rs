@@ -1,6 +1,4 @@
-//! This example is horrible. Please make a better one soon.
-
-use image::{ImageBuffer, Rgb, Rgba};
+use image::{ImageBuffer, Rgba};
 use iter_tools::Itertools;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -39,7 +37,7 @@ use wayland_protocols_wlr::screencopy::v1::client::{
 mod outputs;
 mod points;
 
-use points::{ByTwoPoints, Point, PointInt, Quater, Rectangle};
+use points::{ByTwoPoints, Point, PointInt, Rectangle};
 
 fn main() {
     let conn = Connection::connect_to_env().unwrap();
@@ -86,13 +84,11 @@ fn main() {
         shm,
 
         exit: false,
-        first_configure: true,
         pool,
         width,
         height,
         layer,
         keyboard: None,
-        keyboard_focus: false,
         pointer: None,
 
         buffer: None,
@@ -102,12 +98,8 @@ fn main() {
         state: Default::default(),
     };
 
-    loop {
+    while !app.exit {
         event_queue.blocking_dispatch(&mut app).unwrap();
-
-        if app.exit {
-            break;
-        }
     }
 
     drop(conn);
@@ -171,17 +163,14 @@ struct App {
     shm: Shm,
 
     exit: bool,
-    first_configure: bool,
     pool: SlotPool,
     width: u32,
     height: u32,
     layer: LayerSurface,
     keyboard: Option<wl_keyboard::WlKeyboard>,
-    keyboard_focus: bool,
     pointer: Option<wl_pointer::WlPointer>,
 
     buffer: Option<Buffer>,
-    //image_buffer: ImageBuffer<image::Rgba<u8>, Vec<u8>>,
     zwlr_screencopy_frame: ZwlrScreencopyFrameV1,
     image: Box<[u8]>,
 
@@ -204,7 +193,6 @@ impl<U> Dispatch<ZwlrScreencopyFrameV1, U> for App {
                 stride,
                 format,
             } => {
-                // TODO: save `format` to state
                 let format = match format {
                     wayland_client::WEnum::Value(format) => format,
                     wayland_client::WEnum::Unknown(id) => panic!("unsupported format: {id}"),
@@ -213,7 +201,6 @@ impl<U> Dispatch<ZwlrScreencopyFrameV1, U> for App {
             }
             zwlr_screencopy_frame_v1::Event::Ready { .. } => {
                 state.state = AppState::FullscreenCompleted;
-                //state.draw_fullscreen(qhandle);
                 state.save_buffer_to_image();
                 state.state = AppState::SelectionWait;
                 state.draw_begin_selection(qhandle);
@@ -232,7 +219,6 @@ impl<U> Dispatch<ZwlrScreencopyManagerV1, U> for App {
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
-        // no-op
     }
 }
 
@@ -338,7 +324,7 @@ impl LayerShellHandler for App {
     fn configure(
         &mut self,
         _conn: &Connection,
-        qh: &QueueHandle<Self>,
+        _qh: &QueueHandle<Self>,
         _layer: &LayerSurface,
         configure: LayerSurfaceConfigure,
         _serial: u32,
@@ -349,14 +335,6 @@ impl LayerShellHandler for App {
         } else {
             self.width = configure.new_size.0;
             self.height = configure.new_size.1;
-        }
-
-        // Initiate the first draw.
-        if self.first_configure {
-            self.first_configure = false;
-            // FIXME: remove this line
-
-            //self.draw(qh);
         }
     }
 }
@@ -417,14 +395,11 @@ impl KeyboardHandler for App {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        surface: &wl_surface::WlSurface,
+        _surface: &wl_surface::WlSurface,
         _: u32,
         _: &[u32],
-        keysyms: &[Keysym],
+        _keysyms: &[Keysym],
     ) {
-        if self.layer.wl_surface() == surface {
-            self.keyboard_focus = true;
-        }
     }
 
     fn leave(
@@ -432,12 +407,9 @@ impl KeyboardHandler for App {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        surface: &wl_surface::WlSurface,
+        _surface: &wl_surface::WlSurface,
         _: u32,
     ) {
-        if self.layer.wl_surface() == surface {
-            self.keyboard_focus = false;
-        }
     }
 
     fn press_key(
@@ -467,7 +439,7 @@ impl KeyboardHandler for App {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        event: KeyEvent,
+        _event: KeyEvent,
     ) {
     }
 
@@ -477,7 +449,7 @@ impl KeyboardHandler for App {
         _qh: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
         _serial: u32,
-        modifiers: Modifiers,
+        _modifiers: Modifiers,
         _layout: u32,
     ) {
     }
@@ -776,137 +748,6 @@ impl App {
         let data = self.pool.raw_data_mut(&slot);
 
         self.image = data.to_vec().into_boxed_slice();
-    }
-
-    pub fn export_image(&mut self) {
-        fn xrgb8888_to_argb8888(data: &[u8]) -> Vec<u8> {
-            // Ensure the input length is valid
-            assert!(
-                data.len() % 4 == 0,
-                "Invalid data length for Xrgb8888 format"
-            );
-
-            // Output buffer for Argb8888
-            let mut argb_data = Vec::with_capacity(data.len());
-
-            let mut data = data.chunks_exact(4).peekable();
-            dbg!(data.peek());
-            // Convert each pixel
-            for chunk in data {
-                // Xrgb8888 format: [X, R, G, B]
-                let r = chunk[0];
-                let g = chunk[1];
-                let b = chunk[2];
-
-                // Argb8888 format: [A, R, G, B]
-                argb_data.extend_from_slice(&[b, g, r]);
-            }
-
-            argb_data
-        }
-
-        let buffer = self
-            .buffer
-            .as_ref()
-            .expect("called draw() on non-ready buffer");
-        let slot = buffer.slot();
-        let data = self.pool.raw_data_mut(&slot);
-
-        let data = xrgb8888_to_argb8888(data);
-
-        let buffer = ImageBuffer::<Rgb<u8>, _>::from_raw(self.width, self.height, data)
-            .expect("Failed to create ImageBuffer from raw data");
-
-        // Save the ImageBuffer as a PNG file
-        buffer
-            .save("screen.png")
-            .expect("failed to save to screen.png");
-
-        println!("===========================================");
-        println!("Screenshot saved to screen.png");
-        println!("===========================================");
-
-        #[cfg(not(debug_assertions))]
-        {
-            todo!("Please remove this call from release build")
-        }
-
-        self.exit = true;
-    }
-
-    pub fn draw_fullscreen(&mut self, qh: &QueueHandle<Self>) {
-        // Allow to call this function only in one state.
-        // To ensure we didn't redraw undamaged buffer.
-        debug_assert!(
-            matches!(self.state, AppState::FullscreenCompleted),
-            "called `draw_fullscreen()` in invalid state"
-        );
-
-        let width = self.width;
-        let height = self.height;
-
-        let buffer = self
-            .buffer
-            .as_ref()
-            .expect("called draw_fullscreen() on non-ready buffer");
-
-        /*let canvas = match self.pool.canvas(buffer) {
-            Some(canvas) => canvas,
-            None => {
-                // https://github.com/Smithay/client-toolkit/blob/master/examples/image_viewer.rs#L271-L272
-                // idk, but it seems to be needed
-                let (new_buffer, canvas) = self
-                    .pool
-                    .create_buffer(
-                        width as i32,
-                        height as i32,
-                        stride,
-                        wl_shm::Format::Xrgb8888,
-                    )
-                    .expect("create buffer");
-
-                *buffer = new_buffer;
-
-                canvas
-            }
-        };*/
-
-        // Draw to the window:
-        /*{
-            let image = image::imageops::resize(
-                &self.image_buffer,
-                width,
-                height,
-                image::imageops::FilterType::Nearest,
-            );
-
-            for (pixel, argb) in image.pixels().zip(canvas.chunks_exact_mut(4)) {
-                // We do this in an horribly inefficient manner, for the sake of simplicity.
-                // We'll send pixels to the server in ARGB8888 format (this is one of the only
-                // formats that are guaranteed to be supported), but image provides it in
-                // big-endian RGBA8888, so we need to do the conversion.
-                argb[3] = pixel.0[3];
-                argb[2] = pixel.0[0];
-                argb[1] = pixel.0[1];
-                argb[0] = pixel.0[2];
-            }
-        }*/
-
-        // Damage the entire window
-        self.layer
-            .wl_surface()
-            .damage_buffer(0, 0, width as i32, height as i32);
-
-        // Request our next frame
-        self.layer
-            .wl_surface()
-            .frame(qh, self.layer.wl_surface().clone());
-
-        // Attach and commit to present.
-        buffer
-            .attach_to(self.layer.wl_surface())
-            .expect("buffer attach");
-        self.layer.commit();
     }
 }
 

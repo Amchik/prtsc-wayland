@@ -1,0 +1,930 @@
+//! This example is horrible. Please make a better one soon.
+
+use image::{ImageBuffer, Rgb, Rgba};
+use iter_tools::Itertools;
+use smithay_client_toolkit::{
+    compositor::{CompositorHandler, CompositorState},
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
+    delegate_registry, delegate_seat, delegate_shm,
+    output::{OutputHandler, OutputState},
+    registry::{ProvidesRegistryState, RegistryState},
+    registry_handlers,
+    seat::{
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers},
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        Capability, SeatHandler, SeatState,
+    },
+    shell::{
+        wlr_layer::{
+            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+            LayerSurfaceConfigure,
+        },
+        WaylandSurface,
+    },
+    shm::{
+        slot::{Buffer, SlotPool},
+        Shm, ShmHandler,
+    },
+};
+use wayland_client::{
+    globals::registry_queue_init,
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+    Connection, Dispatch, QueueHandle,
+};
+use wayland_protocols_wlr::screencopy::v1::client::{
+    zwlr_screencopy_frame_v1::{self, ZwlrScreencopyFrameV1},
+    zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
+};
+
+mod outputs;
+mod points;
+
+use points::{ByTwoPoints, Point, PointInt, Quater, Rectangle};
+
+fn main() {
+    let conn = Connection::connect_to_env().unwrap();
+
+    let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
+    let qh = event_queue.handle();
+
+    let output_state = { outputs::output_state(&conn) };
+    let output = output_state.outputs().next().expect("at least one output");
+
+    let (width, height) = {
+        let info = output_state.info(&output).expect("output info");
+        let (w, h) = info.logical_size.expect("logical size");
+
+        (w as u32, h as u32)
+    };
+
+    let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor is not available");
+    let layer_shell = LayerShell::bind(&globals, &qh).expect("layer shell is not available");
+    let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
+
+    let surface = compositor.create_surface(&qh);
+
+    let layer =
+        layer_shell.create_layer_surface(&qh, surface, Layer::Overlay, Some("prtsc-wayland"), None);
+    layer.set_anchor(Anchor::BOTTOM);
+    layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+    layer.set_size(width, height);
+    layer.commit();
+
+    let pool =
+        SlotPool::new(width as usize * height as usize * 4, &shm).expect("Failed to create pool");
+
+    let registry_state = RegistryState::new(&globals);
+    let zwlr_screencopy_manager: ZwlrScreencopyManagerV1 = registry_state
+        .bind_one(&qh, 1..=2, ())
+        .expect("failed to bind zwlr_screencopy_manager_v1");
+
+    let zwlr_screencopy_frame = zwlr_screencopy_manager.capture_output(0, &output, &qh, ());
+    let mut app = App {
+        registry_state,
+        seat_state: SeatState::new(&globals, &qh),
+        output_state,
+        shm,
+
+        exit: false,
+        first_configure: true,
+        pool,
+        width,
+        height,
+        layer,
+        keyboard: None,
+        keyboard_focus: false,
+        pointer: None,
+
+        buffer: None,
+        zwlr_screencopy_frame,
+        image: Box::default(),
+
+        state: Default::default(),
+    };
+
+    loop {
+        event_queue.blocking_dispatch(&mut app).unwrap();
+
+        if app.exit {
+            break;
+        }
+    }
+
+    drop(conn);
+
+    if let AppState::SelectionCompleted(rect) = app.state {
+        let mut data = Vec::with_capacity(rect.width as usize * rect.height as usize * 4);
+
+        let region = app.image.chunks_exact(4);
+        let region = region.chunks(app.width as usize);
+        let region = region
+            .into_iter()
+            .skip(rect.start.y as usize)
+            .take(rect.height as usize)
+            .flat_map(|v| v.skip(rect.start.x as usize).take(rect.width as usize));
+
+        for chunk in region {
+            data.push(chunk[2]);
+            data.push(chunk[1]);
+            data.push(chunk[0]);
+            data.push(255);
+        }
+
+        let buffer = ImageBuffer::<Rgba<u8>, _>::from_raw(rect.width, rect.height, &data[..])
+            .expect("Failed to create ImageBuffer from raw data");
+
+        buffer
+            .save("screen.png")
+            .expect("failed to save to screen.png");
+
+        println!("saved into screen.png");
+    }
+}
+
+/// State of application logic
+#[derive(Clone, Debug, Default)]
+pub enum AppState {
+    /// First state, waiting for `Ready` event.
+    #[default]
+    FullscreenWait,
+    /// Got `Ready` event, performing first draw
+    FullscreenCompleted,
+    /// First draw performed, can select something
+    SelectionWait,
+    /// When one point already choosed, making drawing boxes, etc
+    SelectionProcess {
+        /// Initial point
+        initial: Point,
+        /// Previous point of selection
+        previous: Point,
+        /// Pending point to write
+        pending: Option<Point>,
+    },
+    /// Completed selection, now exiting and saving image
+    SelectionCompleted(Rectangle),
+}
+
+struct App {
+    registry_state: RegistryState,
+    seat_state: SeatState,
+    output_state: OutputState,
+    shm: Shm,
+
+    exit: bool,
+    first_configure: bool,
+    pool: SlotPool,
+    width: u32,
+    height: u32,
+    layer: LayerSurface,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    keyboard_focus: bool,
+    pointer: Option<wl_pointer::WlPointer>,
+
+    buffer: Option<Buffer>,
+    //image_buffer: ImageBuffer<image::Rgba<u8>, Vec<u8>>,
+    zwlr_screencopy_frame: ZwlrScreencopyFrameV1,
+    image: Box<[u8]>,
+
+    state: AppState,
+}
+
+impl<U> Dispatch<ZwlrScreencopyFrameV1, U> for App {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwlrScreencopyFrameV1,
+        event: <ZwlrScreencopyFrameV1 as wayland_client::Proxy>::Event,
+        _data: &U,
+        _conn: &Connection,
+        qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_screencopy_frame_v1::Event::Buffer {
+                width,
+                height,
+                stride,
+                format,
+            } => {
+                // TODO: save `format` to state
+                let format = match format {
+                    wayland_client::WEnum::Value(format) => format,
+                    wayland_client::WEnum::Unknown(id) => panic!("unsupported format: {id}"),
+                };
+                state.recreate_buffer(width as i32, height as i32, stride as i32, format);
+            }
+            zwlr_screencopy_frame_v1::Event::Ready { .. } => {
+                state.state = AppState::FullscreenCompleted;
+                //state.draw_fullscreen(qhandle);
+                state.save_buffer_to_image();
+                state.state = AppState::SelectionWait;
+                state.draw_begin_selection(qhandle);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl<U> Dispatch<ZwlrScreencopyManagerV1, U> for App {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwlrScreencopyManagerV1,
+        _event: <ZwlrScreencopyManagerV1 as wayland_client::Proxy>::Event,
+        _data: &U,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // no-op
+    }
+}
+
+impl CompositorHandler for App {
+    fn scale_factor_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_factor: i32,
+    ) {
+    }
+
+    fn transform_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_transform: wl_output::Transform,
+    ) {
+    }
+
+    fn frame(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _time: u32,
+    ) {
+        if let AppState::SelectionProcess {
+            pending: Some(pos), ..
+        } = &self.state
+        {
+            let pos = pos.clone();
+            if self.draw_in_selection(qh, pos.clone()) {
+                match &mut self.state {
+                    AppState::SelectionProcess {
+                        previous, pending, ..
+                    } => {
+                        *pending = None;
+                        *previous = pos;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
+    fn surface_enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+
+    fn surface_leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl OutputHandler for App {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl LayerShellHandler for App {
+    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
+        self.exit = true;
+    }
+
+    fn configure(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _layer: &LayerSurface,
+        configure: LayerSurfaceConfigure,
+        _serial: u32,
+    ) {
+        if configure.new_size.0 == 0 || configure.new_size.1 == 0 {
+            self.width = 256;
+            self.height = 256;
+        } else {
+            self.width = configure.new_size.0;
+            self.height = configure.new_size.1;
+        }
+
+        // Initiate the first draw.
+        if self.first_configure {
+            self.first_configure = false;
+            // FIXME: remove this line
+
+            //self.draw(qh);
+        }
+    }
+}
+
+impl SeatHandler for App {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            let keyboard = self
+                .seat_state
+                .get_keyboard(qh, &seat, None)
+                .expect("Failed to create keyboard");
+            self.keyboard = Some(keyboard);
+        }
+
+        if capability == Capability::Pointer && self.pointer.is_none() {
+            let pointer = self
+                .seat_state
+                .get_pointer(qh, &seat)
+                .expect("Failed to create pointer");
+            self.pointer = Some(pointer);
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _conn: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Keyboard && self.keyboard.is_some() {
+            self.keyboard.take().unwrap().release();
+        }
+
+        if capability == Capability::Pointer && self.pointer.is_some() {
+            self.pointer.take().unwrap().release();
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl KeyboardHandler for App {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        surface: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        keysyms: &[Keysym],
+    ) {
+        if self.layer.wl_surface() == surface {
+            self.keyboard_focus = true;
+        }
+    }
+
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        surface: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+        if self.layer.wl_surface() == surface {
+            self.keyboard_focus = false;
+        }
+    }
+
+    fn press_key(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        if event.keysym == Keysym::Escape {
+            match &self.state {
+                AppState::SelectionProcess { .. } => {
+                    self.state = AppState::SelectionWait;
+                    self.draw_begin_selection(qh);
+                }
+                _ => {
+                    self.exit = true;
+                }
+            }
+        }
+    }
+
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+    }
+
+    fn update_modifiers(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        modifiers: Modifiers,
+        _layout: u32,
+    ) {
+    }
+}
+
+impl PointerHandler for App {
+    fn pointer_frame(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        use PointerEventKind::*;
+        for event in events {
+            // Ignore events for other surfaces
+            if &event.surface != self.layer.wl_surface() {
+                continue;
+            }
+            let pos = Point::new(event.position.0 as PointInt, event.position.1 as PointInt);
+            match event.kind {
+                Motion { .. } => {
+                    if let AppState::SelectionProcess { previous, .. } = &self.state {
+                        if previous != &pos {
+                            if self.draw_in_selection(qh, pos.clone()) {
+                                match &mut self.state {
+                                    AppState::SelectionProcess { previous, .. } => {
+                                        *previous = pos;
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            } else {
+                                match &mut self.state {
+                                    AppState::SelectionProcess { pending, .. } => {
+                                        *pending = Some(pos);
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            }
+                        }
+                    }
+                }
+                Press { button: 272, .. } => {
+                    self.state = AppState::SelectionProcess {
+                        initial: pos.clone(),
+                        previous: pos,
+                        pending: None,
+                    };
+                }
+                Release { button: 272, .. } => {
+                    let (init, current) = match &self.state {
+                        AppState::SelectionProcess {
+                            initial, previous, ..
+                        } => (initial, previous),
+                        _ => return,
+                    };
+                    let Some(rect) = Rectangle::from_two_points(init.clone(), current.clone())
+                    else {
+                        eprintln!("selected zero-area region, exiting");
+                        std::process::exit(1);
+                    };
+                    self.exit = true;
+                    self.state = AppState::SelectionCompleted(rect);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl ShmHandler for App {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm
+    }
+}
+
+fn dim_u8(src: u8) -> u8 {
+    const DIM_FACTOR: u8 = 128;
+
+    (src as usize * DIM_FACTOR as usize / 256) as u8
+}
+
+impl App {
+    pub fn recreate_buffer(
+        &mut self,
+        width: i32,
+        height: i32,
+        stride: i32,
+        format: wl_shm::Format,
+    ) {
+        self.width = width as u32;
+        self.height = height as u32;
+        self.buffer = Some({
+            let (buffer, _canvas) = self
+                .pool
+                .create_buffer(width, height, stride, format)
+                .expect("create buffer");
+
+            self.zwlr_screencopy_frame.copy(buffer.wl_buffer());
+
+            buffer
+        });
+    }
+
+    fn crosshair_draw(
+        canvas: &mut [u8],
+        pos: &Point,
+        width: u32,
+        height: u32,
+        layer: &LayerSurface,
+    ) {
+        let rect = Rectangle::new(Point::new(pos.x, 0), 0, height);
+        rect.region_in_array(canvas.chunks_exact_mut(4), width as usize, |v| {
+            v[0] = 255;
+            v[1] = 255;
+            v[2] = 255;
+            v[3] = 255;
+        });
+        layer.wl_surface().damage_buffer(
+            rect.start.x as i32,
+            rect.start.y as i32,
+            1,
+            rect.height as i32,
+        );
+
+        let rect = Rectangle::new(Point::new(0, pos.y), width, 0);
+        rect.region_in_array(canvas.chunks_exact_mut(4), width as usize, |v| {
+            v[0] = 255;
+            v[1] = 255;
+            v[2] = 255;
+            v[3] = 255;
+        });
+        layer.wl_surface().damage_buffer(
+            rect.start.x as i32,
+            rect.start.y as i32,
+            rect.width as i32,
+            1,
+        );
+    }
+
+    fn crosshair_clear(
+        canvas: &mut [u8],
+        pos: &Point,
+        width: u32,
+        height: u32,
+        layer: &LayerSurface,
+        image: &[u8],
+    ) {
+        let rect = Rectangle::new(Point::new(pos.x, 0), 0, height);
+        rect.region_in_array(
+            canvas.chunks_exact_mut(4).zip(image.chunks_exact(4)),
+            width as usize,
+            |(dst, src)| {
+                dst[0] = dim_u8(src[0]);
+                dst[1] = dim_u8(src[1]);
+                dst[2] = dim_u8(src[2]);
+                dst[3] = dim_u8(src[3]);
+            },
+        );
+        layer.wl_surface().damage_buffer(
+            rect.start.x as i32,
+            rect.start.y as i32,
+            1,
+            rect.height as i32,
+        );
+
+        let rect = Rectangle::new(Point::new(0, pos.y), width, 0);
+        rect.region_in_array(
+            canvas.chunks_exact_mut(4).zip(image.chunks_exact(4)),
+            width as usize,
+            |(dst, src)| {
+                dst[0] = dim_u8(src[0]);
+                dst[1] = dim_u8(src[1]);
+                dst[2] = dim_u8(src[2]);
+                dst[3] = dim_u8(src[3]);
+            },
+        );
+        layer.wl_surface().damage_buffer(
+            rect.start.x as i32,
+            rect.start.y as i32,
+            rect.width as i32,
+            1,
+        );
+    }
+
+    pub fn draw_in_selection(&mut self, qh: &QueueHandle<Self>, pos: Point) -> bool {
+        let buffer = self.buffer.as_mut().expect("non-ready buffer");
+        let canvas = match self.pool.canvas(buffer) {
+            Some(canvas) => canvas,
+            None => {
+                return false;
+            }
+        };
+
+        let image = &self.image;
+
+        let (init, prev) = match &self.state {
+            AppState::SelectionProcess {
+                initial, previous, ..
+            } => (initial, previous),
+            _ => unreachable!("called draw_in_selection on incorrect state"),
+        };
+
+        Self::crosshair_clear(
+            canvas,
+            prev,
+            self.width,
+            self.height,
+            &self.layer,
+            &self.image,
+        );
+
+        if let ByTwoPoints::Rectangle(rect) = init.clone().into_figure(pos.clone()) {
+            rect.region_in_array(
+                canvas.chunks_exact_mut(4).zip(image.chunks_exact(4)),
+                self.width as usize,
+                |(dst, src)| dst.copy_from_slice(src),
+            );
+            self.layer.wl_surface().damage_buffer(
+                rect.start.x as i32,
+                rect.start.y as i32,
+                rect.width as i32,
+                rect.height as i32,
+            );
+        }
+
+        Self::crosshair_draw(canvas, init, self.width, self.height, &self.layer);
+        Self::crosshair_draw(canvas, &pos, self.width, self.height, &self.layer);
+
+        // Request our next frame
+        self.layer
+            .wl_surface()
+            .frame(qh, self.layer.wl_surface().clone());
+
+        // Attach and commit to present.
+        buffer
+            .attach_to(self.layer.wl_surface())
+            .expect("buffer attach");
+        self.layer.commit();
+
+        true
+    }
+
+    pub fn draw_begin_selection(&mut self, qh: &QueueHandle<Self>) {
+        // Assert that we call this function in correct state.
+        debug_assert!(matches!(self.state, AppState::SelectionWait));
+
+        let (buffer, canvas) = {
+            self.buffer = None;
+            let canvas;
+            let buffer = self.buffer.insert({
+                let (buffer, new_canvas) = self
+                    .pool
+                    .create_buffer(
+                        self.width as i32,
+                        self.height as i32,
+                        self.width as i32 * 4,
+                        wl_shm::Format::Xrgb8888,
+                    )
+                    .expect("buffer");
+                canvas = new_canvas;
+                buffer
+            });
+
+            (buffer, canvas)
+        };
+
+        canvas
+            .iter_mut()
+            .zip(self.image.iter())
+            .for_each(|(dst, &src)| *dst = dim_u8(src));
+
+        // Damage the entire window
+        self.layer
+            .wl_surface()
+            .damage_buffer(0, 0, self.width as i32, self.height as i32);
+
+        // Request our next frame
+        self.layer
+            .wl_surface()
+            .frame(qh, self.layer.wl_surface().clone());
+
+        // Attach and commit to present.
+        buffer
+            .attach_to(self.layer.wl_surface())
+            .expect("buffer attach");
+        self.layer.commit();
+    }
+
+    pub fn save_buffer_to_image(&mut self) {
+        let buffer = self
+            .buffer
+            .as_ref()
+            .expect("called draw() on non-ready buffer");
+        let slot = buffer.slot();
+        let data = self.pool.raw_data_mut(&slot);
+
+        self.image = data.to_vec().into_boxed_slice();
+    }
+
+    pub fn export_image(&mut self) {
+        fn xrgb8888_to_argb8888(data: &[u8]) -> Vec<u8> {
+            // Ensure the input length is valid
+            assert!(
+                data.len() % 4 == 0,
+                "Invalid data length for Xrgb8888 format"
+            );
+
+            // Output buffer for Argb8888
+            let mut argb_data = Vec::with_capacity(data.len());
+
+            let mut data = data.chunks_exact(4).peekable();
+            dbg!(data.peek());
+            // Convert each pixel
+            for chunk in data {
+                // Xrgb8888 format: [X, R, G, B]
+                let r = chunk[0];
+                let g = chunk[1];
+                let b = chunk[2];
+
+                // Argb8888 format: [A, R, G, B]
+                argb_data.extend_from_slice(&[b, g, r]);
+            }
+
+            argb_data
+        }
+
+        let buffer = self
+            .buffer
+            .as_ref()
+            .expect("called draw() on non-ready buffer");
+        let slot = buffer.slot();
+        let data = self.pool.raw_data_mut(&slot);
+
+        let data = xrgb8888_to_argb8888(data);
+
+        let buffer = ImageBuffer::<Rgb<u8>, _>::from_raw(self.width, self.height, data)
+            .expect("Failed to create ImageBuffer from raw data");
+
+        // Save the ImageBuffer as a PNG file
+        buffer
+            .save("screen.png")
+            .expect("failed to save to screen.png");
+
+        println!("===========================================");
+        println!("Screenshot saved to screen.png");
+        println!("===========================================");
+
+        #[cfg(not(debug_assertions))]
+        {
+            todo!("Please remove this call from release build")
+        }
+
+        self.exit = true;
+    }
+
+    pub fn draw_fullscreen(&mut self, qh: &QueueHandle<Self>) {
+        // Allow to call this function only in one state.
+        // To ensure we didn't redraw undamaged buffer.
+        debug_assert!(
+            matches!(self.state, AppState::FullscreenCompleted),
+            "called `draw_fullscreen()` in invalid state"
+        );
+
+        let width = self.width;
+        let height = self.height;
+
+        let buffer = self
+            .buffer
+            .as_ref()
+            .expect("called draw_fullscreen() on non-ready buffer");
+
+        /*let canvas = match self.pool.canvas(buffer) {
+            Some(canvas) => canvas,
+            None => {
+                // https://github.com/Smithay/client-toolkit/blob/master/examples/image_viewer.rs#L271-L272
+                // idk, but it seems to be needed
+                let (new_buffer, canvas) = self
+                    .pool
+                    .create_buffer(
+                        width as i32,
+                        height as i32,
+                        stride,
+                        wl_shm::Format::Xrgb8888,
+                    )
+                    .expect("create buffer");
+
+                *buffer = new_buffer;
+
+                canvas
+            }
+        };*/
+
+        // Draw to the window:
+        /*{
+            let image = image::imageops::resize(
+                &self.image_buffer,
+                width,
+                height,
+                image::imageops::FilterType::Nearest,
+            );
+
+            for (pixel, argb) in image.pixels().zip(canvas.chunks_exact_mut(4)) {
+                // We do this in an horribly inefficient manner, for the sake of simplicity.
+                // We'll send pixels to the server in ARGB8888 format (this is one of the only
+                // formats that are guaranteed to be supported), but image provides it in
+                // big-endian RGBA8888, so we need to do the conversion.
+                argb[3] = pixel.0[3];
+                argb[2] = pixel.0[0];
+                argb[1] = pixel.0[1];
+                argb[0] = pixel.0[2];
+            }
+        }*/
+
+        // Damage the entire window
+        self.layer
+            .wl_surface()
+            .damage_buffer(0, 0, width as i32, height as i32);
+
+        // Request our next frame
+        self.layer
+            .wl_surface()
+            .frame(qh, self.layer.wl_surface().clone());
+
+        // Attach and commit to present.
+        buffer
+            .attach_to(self.layer.wl_surface())
+            .expect("buffer attach");
+        self.layer.commit();
+    }
+}
+
+delegate_compositor!(App);
+delegate_output!(App);
+delegate_shm!(App);
+
+delegate_seat!(App);
+delegate_keyboard!(App);
+delegate_pointer!(App);
+
+delegate_layer!(App);
+
+delegate_registry!(App);
+
+impl ProvidesRegistryState for App {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+    registry_handlers![OutputState, SeatState];
+}

@@ -1,5 +1,5 @@
 use clap::Parser;
-use image::{ImageBuffer, Rgba};
+use image::{ImageBuffer, Rgb};
 use iter_tools::Itertools;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -92,7 +92,7 @@ fn main() {
 
     let registry_state = RegistryState::new(&globals);
     let zwlr_screencopy_manager: ZwlrScreencopyManagerV1 = registry_state
-        .bind_one(&qh, 1..=2, ())
+        .bind_one(&qh, 1..=3, ())
         .expect("failed to bind zwlr_screencopy_manager_v1");
 
     let zwlr_screencopy_frame = zwlr_screencopy_manager.capture_output(0, &output, &qh, ());
@@ -143,17 +143,16 @@ fn main() {
             data.push(chunk[2]);
             data.push(chunk[1]);
             data.push(chunk[0]);
-            data.push(255);
         }
 
-        let buffer = ImageBuffer::<Rgba<u8>, _>::from_raw(rect.width, rect.height, &data[..])
+        let buffer = ImageBuffer::<Rgb<u8>, _>::from_raw(rect.width, rect.height, &data[..])
             .expect("Failed to create ImageBuffer from raw data");
 
         if let Err(e) = buffer.save(&args.output) {
             eprintln!("failed to save: {e}");
+        } else {
+            println!("saved to {}", args.output);
         }
-
-        println!("saved into {}", args.output);
     }
 }
 

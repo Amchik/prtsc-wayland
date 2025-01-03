@@ -1,4 +1,4 @@
-# `prtsc-wayland` (WIP)
+# `prtsc-wayland`
 
 > 📸 Screenshot utility for wayland
 
@@ -24,14 +24,20 @@ Options:
   -o, --output <OUTPUT>  File to save screenshot [default: image.png]
   -f, --fullscreen       Do not use region selector
   -h, --help             Print help
- ```
+```
 
- I don't know what formats are supported, see [docs.rs/image](https://docs.rs/image) if you really
- interested. Fullscreen mode (`-f`) is just default grim behavior, I added it just for fun.
+I don't know what formats are supported, see [docs.rs/image](https://docs.rs/image) if you really
+interested. Fullscreen mode (`-f`) is just default grim behavior (making screenshot without drawing
+something on screen), I added it just for fun.
 
- To exit selection press <kbd>Esc</kbd>. Press it again to exit overlay.
+To exit selection press <kbd>Esc</kbd>. Press it again to exit overlay.
 
 ## Problems
 
 - Software rendering...
+
+## Thanks
+
+- [grim](https://sr.ht/~emersion/grim/) and [slurp](https://github.com/emersion/slurp)
+- [this example from `smithay-client-toolkit`](https://github.com/Smithay/client-toolkit/blob/master/examples/simple_layer.rs)
 

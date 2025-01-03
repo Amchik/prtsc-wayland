@@ -31,8 +31,8 @@ Options:
 
  To exit selection press <kbd>Esc</kbd>. Press it again to exit overlay.
 
-## Bugs
+## Problems
 
-- I didn't add selection cleaning, so resizing is ugly.
+- Software rendering...
 - Pointers...
 

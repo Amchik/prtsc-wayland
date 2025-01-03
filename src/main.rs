@@ -671,6 +671,31 @@ impl App {
         );
     }
 
+    fn dim_rect(
+        rect: Rectangle,
+        canvas: &mut [u8],
+        image: &[u8],
+        width: usize,
+        layer: &LayerSurface,
+    ) {
+        rect.region_in_array(
+            canvas.chunks_exact_mut(4).zip(image.chunks_exact(4)),
+            width,
+            |(dst, src)| {
+                dst[0] = dim_u8(src[0]);
+                dst[1] = dim_u8(src[1]);
+                dst[2] = dim_u8(src[2]);
+                dst[3] = dim_u8(src[3]);
+            },
+        );
+        layer.wl_surface().damage_buffer(
+            rect.start.x as i32,
+            rect.start.y as i32,
+            rect.width as i32,
+            rect.height as i32,
+        );
+    }
+
     pub fn draw_in_selection(&mut self, qh: &QueueHandle<Self>, pos: Point) -> bool {
         let buffer = self.buffer.as_mut().expect("non-ready buffer");
         let canvas = match self.pool.canvas(buffer) {
@@ -697,6 +722,25 @@ impl App {
             &self.layer,
             &self.image,
         );
+
+        if init.is_same_quater(&pos, prev) {
+            // NOTE: rectangle (prev) -> (pos) is rewriting twice.
+            if let Some(rect) = Rectangle::from_two_points(pos.clone(), prev.clone()) {
+                Self::dim_rect(rect, canvas, image, self.width as usize, &self.layer);
+            }
+
+            let axis_x = Point::new(prev.x, init.y);
+            if let Some(rect) = Rectangle::from_two_points(pos.clone(), axis_x) {
+                Self::dim_rect(rect, canvas, image, self.width as usize, &self.layer);
+            }
+
+            let axis_y = Point::new(init.x, prev.y);
+            if let Some(rect) = Rectangle::from_two_points(pos.clone(), axis_y) {
+                Self::dim_rect(rect, canvas, image, self.width as usize, &self.layer);
+            }
+        } else if let Some(rect) = Rectangle::from_two_points(init.clone(), prev.clone()) {
+            Self::dim_rect(rect, canvas, image, self.width as usize, &self.layer);
+        }
 
         if let ByTwoPoints::Rectangle(rect) = init.clone().into_figure(pos.clone()) {
             rect.region_in_array(

@@ -1,3 +1,4 @@
+use clap::Parser;
 use image::{ImageBuffer, Rgba};
 use iter_tools::Itertools;
 use smithay_client_toolkit::{
@@ -39,7 +40,20 @@ mod points;
 
 use points::{ByTwoPoints, Point, PointInt, Rectangle};
 
+#[derive(Parser)]
+struct Args {
+    /// File to save screenshot
+    #[arg(long, short, default_value = "image.png")]
+    output: String,
+
+    /// Do not use region selector
+    #[arg(long, short)]
+    fullscreen: bool,
+}
+
 fn main() {
+    let args = Args::parse();
+
     let conn = Connection::connect_to_env().unwrap();
 
     let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
@@ -95,7 +109,11 @@ fn main() {
         zwlr_screencopy_frame,
         image: Box::default(),
 
-        state: Default::default(),
+        state: if args.fullscreen {
+            AppState::FullscreenOnly
+        } else {
+            AppState::default()
+        },
     };
 
     while !app.exit {
@@ -125,17 +143,23 @@ fn main() {
         let buffer = ImageBuffer::<Rgba<u8>, _>::from_raw(rect.width, rect.height, &data[..])
             .expect("Failed to create ImageBuffer from raw data");
 
-        buffer
-            .save("screen.png")
-            .expect("failed to save to screen.png");
+        if let Err(e) = buffer.save(&args.output) {
+            eprintln!("failed to save: {e}");
+        }
 
-        println!("saved into screen.png");
+        println!("saved into {}", args.output);
     }
 }
 
 /// State of application logic
 #[derive(Clone, Debug, Default)]
 pub enum AppState {
+    /// Like [`FullscreenWait`] but after completing fullscreen
+    /// capturing skips all other states and jumps to [`SelectionCompleted`]
+    /// with fullscreen rectangle. Used in `--fullscreen` mode.
+    /// Doesn't draws anything.
+    FullscreenOnly,
+
     /// First state, waiting for `Ready` event.
     #[default]
     FullscreenWait,
@@ -200,10 +224,22 @@ impl<U> Dispatch<ZwlrScreencopyFrameV1, U> for App {
                 state.recreate_buffer(width as i32, height as i32, stride as i32, format);
             }
             zwlr_screencopy_frame_v1::Event::Ready { .. } => {
+                let fullscreen_only = matches!(state.state, AppState::FullscreenOnly);
+
                 state.state = AppState::FullscreenCompleted;
                 state.save_buffer_to_image();
-                state.state = AppState::SelectionWait;
-                state.draw_begin_selection(qhandle);
+
+                if fullscreen_only {
+                    state.state = AppState::SelectionCompleted(Rectangle::new(
+                        Point::new(0, 0),
+                        state.width,
+                        state.height,
+                    ));
+                    state.exit = true;
+                } else {
+                    state.state = AppState::SelectionWait;
+                    state.draw_begin_selection(qhandle);
+                }
             }
             _ => {}
         }

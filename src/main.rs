@@ -10,7 +10,9 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers},
-        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        pointer::{
+            cursor_shape::CursorShapeManager, PointerEvent, PointerEventKind, PointerHandler,
+        },
         Capability, SeatHandler, SeatState,
     },
     shell::{
@@ -30,6 +32,7 @@ use wayland_client::{
     protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
     Connection, Dispatch, QueueHandle,
 };
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_frame_v1::{self, ZwlrScreencopyFrameV1},
     zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
@@ -82,6 +85,8 @@ fn main() {
     layer.set_size(width, height);
     layer.commit();
 
+    let shape_manager = CursorShapeManager::bind(&globals, &qh).ok();
+
     let pool =
         SlotPool::new(width as usize * height as usize * 4, &shm).expect("Failed to create pool");
 
@@ -95,6 +100,7 @@ fn main() {
         registry_state,
         seat_state: SeatState::new(&globals, &qh),
         output_state,
+        shape_manager,
         shm,
 
         exit: false,
@@ -184,6 +190,7 @@ struct App {
     registry_state: RegistryState,
     seat_state: SeatState,
     output_state: OutputState,
+    shape_manager: Option<CursorShapeManager>,
     shm: Shm,
 
     exit: bool,
@@ -496,7 +503,7 @@ impl PointerHandler for App {
         &mut self,
         _conn: &Connection,
         qh: &QueueHandle<Self>,
-        _pointer: &wl_pointer::WlPointer,
+        pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
         use PointerEventKind::*;
@@ -507,6 +514,12 @@ impl PointerHandler for App {
             }
             let pos = Point::new(event.position.0 as PointInt, event.position.1 as PointInt);
             match event.kind {
+                Enter { serial } => {
+                    if let Some(shape_manager) = &self.shape_manager {
+                        let dev = shape_manager.get_shape_device(pointer, qh);
+                        dev.set_shape(serial, Shape::Crosshair);
+                    }
+                }
                 Motion { .. } => {
                     if let AppState::SelectionProcess { previous, .. } = &self.state {
                         if previous != &pos {

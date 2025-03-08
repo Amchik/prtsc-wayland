@@ -82,7 +82,7 @@ fn main() {
         layer_shell.create_layer_surface(&qh, surface, Layer::Overlay, Some("prtsc-wayland"), None);
     layer.set_anchor(Anchor::all());
     layer.set_exclusive_zone(-1);
-    layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+    layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
     layer.set_size(width, height);
     layer.commit();
 

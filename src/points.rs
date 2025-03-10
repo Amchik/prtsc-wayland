@@ -1,7 +1,5 @@
 use std::cmp::Ordering;
 
-use iter_tools::Itertools;
-
 pub type PointInt = u32;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

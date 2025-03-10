@@ -13,9 +13,14 @@ pub fn output_state(conn: &Connection) -> OutputState {
     let registry_state = RegistryState::new(&globals);
     let output_delegate = OutputState::new(&globals, &qh);
 
-    let mut app = GetOutputs { registry_state, output_state: output_delegate };
+    let mut app = GetOutputs {
+        registry_state,
+        output_state: output_delegate,
+    };
 
-    event_queue.roundtrip(&mut app).expect("output_state app roundtrip");
+    event_queue
+        .roundtrip(&mut app)
+        .expect("output_state app roundtrip");
 
     app.output_state
 }

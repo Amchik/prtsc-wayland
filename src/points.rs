@@ -101,8 +101,8 @@ impl Point {
         }
     }
 
-    /// Returns the non-negative "distance" between two points. 
-    /// This function implements a valid metric but is not necessarily Euclidean. 
+    /// Returns the non-negative "distance" between two points.
+    /// This function implements a valid metric but is not necessarily Euclidean.
     /// The distance is zero if and only if the two points are equal.
     pub fn metric(&self, other: &Self) -> PointInt {
         // In this project, the Manhattan metric is sufficient
@@ -177,26 +177,6 @@ impl Rectangle {
             }
         }
     }
-
-    pub fn region_in_array<T>(
-        &self,
-        arr: impl IntoIterator<Item = T>,
-        width: usize,
-        mut f: impl FnMut(T),
-    ) {
-        let arr = arr.into_iter().chunks(width);
-        let arr = arr
-            .into_iter()
-            .skip(self.start.y as usize)
-            .take(self.height as usize + 1);
-
-        for chunk in arr {
-            chunk
-                .skip(self.start.x as usize)
-                .take(self.width as usize + 1)
-                .for_each(&mut f)
-        }
-    }
 }
 
 impl Line {
@@ -252,7 +232,6 @@ mod tests {
             (Point::new(5, 5), Point::new(4, 6), Quater::BottomLeft),
             (Point::new(5, 5), Point::new(4, 4), Quater::TopLeft),
             (Point::new(5, 5), Point::new(6, 4), Quater::TopRight),
-
             (Point::new(5, 5), Point::new(5, 6), Quater::AxisY),
             (Point::new(5, 5), Point::new(6, 5), Quater::AxisX),
             (Point::new(5, 5), Point::new(5, 5), Quater::Centre),
@@ -265,4 +244,3 @@ mod tests {
         }
     }
 }
-

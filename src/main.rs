@@ -610,33 +610,23 @@ impl App {
         height: u32,
         layer: &LayerSurface,
     ) {
-        let rect = Rectangle::new(Point::new(pos.x, 0), 0, height);
-        rect.region_in_array(canvas.chunks_exact_mut(4), width as usize, |v| {
-            v[0] = 255;
-            v[1] = 255;
-            v[2] = 255;
-            v[3] = 255;
-        });
-        layer.wl_surface().damage_buffer(
-            rect.start.x as i32,
-            rect.start.y as i32,
-            1,
-            rect.height as i32,
-        );
+        // Horizontal line
+        for ptr in 0..height {
+            let ptr = (pos.x + ptr * width) as usize * 4;
+            canvas[ptr] = 255;
+            canvas[ptr + 1] = 255;
+            canvas[ptr + 2] = 255;
+            canvas[ptr + 3] = 255;
+        }
+        // Vertical line
+        canvas[(width * pos.y) as usize * 4..(width * (pos.y + 1)) as usize * 4].fill(255);
 
-        let rect = Rectangle::new(Point::new(0, pos.y), width, 0);
-        rect.region_in_array(canvas.chunks_exact_mut(4), width as usize, |v| {
-            v[0] = 255;
-            v[1] = 255;
-            v[2] = 255;
-            v[3] = 255;
-        });
-        layer.wl_surface().damage_buffer(
-            rect.start.x as i32,
-            rect.start.y as i32,
-            rect.width as i32,
-            1,
-        );
+        layer
+            .wl_surface()
+            .damage_buffer(pos.x as i32, 0, 1, height as i32);
+        layer
+            .wl_surface()
+            .damage_buffer(0, pos.y as i32, width as i32, 1);
     }
 
     fn crosshair_clear(
@@ -647,41 +637,27 @@ impl App {
         layer: &LayerSurface,
         image: &[u8],
     ) {
-        let rect = Rectangle::new(Point::new(pos.x, 0), 0, height);
-        rect.region_in_array(
-            canvas.chunks_exact_mut(4).zip(image.chunks_exact(4)),
-            width as usize,
-            |(dst, src)| {
-                dst[0] = dim_u8(src[0]);
-                dst[1] = dim_u8(src[1]);
-                dst[2] = dim_u8(src[2]);
-                dst[3] = dim_u8(src[3]);
-            },
-        );
-        layer.wl_surface().damage_buffer(
-            rect.start.x as i32,
-            rect.start.y as i32,
-            1,
-            rect.height as i32,
-        );
+        for ptr in 0..height {
+            let ptr = (pos.x + ptr * width) as usize * 4;
+            canvas[ptr] = dim_u8(image[ptr]);
+            canvas[ptr + 1] = dim_u8(image[ptr + 1]);
+            canvas[ptr + 2] = dim_u8(image[ptr + 2]);
+            canvas[ptr + 3] = dim_u8(image[ptr + 3]);
+        }
+        for ptr in width * pos.y..width * (pos.y + 1) {
+            let ptr = ptr as usize * 4;
+            canvas[ptr] = dim_u8(image[ptr]);
+            canvas[ptr + 1] = dim_u8(image[ptr + 1]);
+            canvas[ptr + 2] = dim_u8(image[ptr + 2]);
+            canvas[ptr + 3] = dim_u8(image[ptr + 3]);
+        }
 
-        let rect = Rectangle::new(Point::new(0, pos.y), width, 0);
-        rect.region_in_array(
-            canvas.chunks_exact_mut(4).zip(image.chunks_exact(4)),
-            width as usize,
-            |(dst, src)| {
-                dst[0] = dim_u8(src[0]);
-                dst[1] = dim_u8(src[1]);
-                dst[2] = dim_u8(src[2]);
-                dst[3] = dim_u8(src[3]);
-            },
-        );
-        layer.wl_surface().damage_buffer(
-            rect.start.x as i32,
-            rect.start.y as i32,
-            rect.width as i32,
-            1,
-        );
+        layer
+            .wl_surface()
+            .damage_buffer(pos.x as i32, 0, 1, height as i32);
+        layer
+            .wl_surface()
+            .damage_buffer(0, pos.y as i32, width as i32, 1);
     }
 
     fn dim_rect(
@@ -691,16 +667,16 @@ impl App {
         width: usize,
         layer: &LayerSurface,
     ) {
-        rect.region_in_array(
-            canvas.chunks_exact_mut(4).zip(image.chunks_exact(4)),
-            width,
-            |(dst, src)| {
-                dst[0] = dim_u8(src[0]);
-                dst[1] = dim_u8(src[1]);
-                dst[2] = dim_u8(src[2]);
-                dst[3] = dim_u8(src[3]);
-            },
-        );
+        for col in rect.start.x..(rect.start.x + rect.width) {
+            for row in rect.start.y..(rect.start.y + rect.height) {
+                let pos = row as usize * width + col as usize;
+                canvas[pos * 4] = dim_u8(image[pos * 4]);
+                canvas[pos * 4 + 1] = dim_u8(image[pos * 4 + 1]);
+                canvas[pos * 4 + 2] = dim_u8(image[pos * 4 + 2]);
+                canvas[pos * 4 + 3] = dim_u8(image[pos * 4 + 3]);
+            }
+        }
+
         layer.wl_surface().damage_buffer(
             rect.start.x as i32,
             rect.start.y as i32,
@@ -756,11 +732,12 @@ impl App {
         }
 
         if let ByTwoPoints::Rectangle(rect) = init.clone().into_figure(pos.clone()) {
-            rect.region_in_array(
-                canvas.chunks_exact_mut(4).zip(image.chunks_exact(4)),
-                self.width as usize,
-                |(dst, src)| dst.copy_from_slice(src),
-            );
+            for row in rect.start.y..rect.start.y + rect.height {
+                let row = (self.width * row) as usize * 4;
+                let start = row + rect.start.x as usize * 4;
+                let end = start + rect.width as usize * 4;
+                canvas[start..end].copy_from_slice(&image[start..end]);
+            }
             self.layer.wl_surface().damage_buffer(
                 rect.start.x as i32,
                 rect.start.y as i32,
@@ -772,15 +749,13 @@ impl App {
         Self::crosshair_draw(canvas, init, self.width, self.height, &self.layer);
         Self::crosshair_draw(canvas, &pos, self.width, self.height, &self.layer);
 
+        let surface = self.layer.wl_surface();
+
         // Request our next frame
-        self.layer
-            .wl_surface()
-            .frame(qh, self.layer.wl_surface().clone());
+        self.layer.wl_surface().frame(qh, surface.clone());
 
         // Attach and commit to present.
-        buffer
-            .attach_to(self.layer.wl_surface())
-            .expect("buffer attach");
+        buffer.attach_to(surface).expect("buffer attach");
         self.layer.commit();
 
         true

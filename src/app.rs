@@ -26,29 +26,23 @@ use smithay_client_toolkit::{
     shm::{slot::SlotPool, CreatePoolError, Shm, ShmHandler},
 };
 use wayland_client::{
-    globals::{registry_queue_init, BindError, GlobalError, GlobalList}, protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface}, ConnectError, Connection, Dispatch, DispatchError, EventQueue, QueueHandle
+    globals::{registry_queue_init, BindError, GlobalError, GlobalList},
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
+    ConnectError, Connection, Dispatch, DispatchError, EventQueue, QueueHandle,
 };
 use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1,
     zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
 };
 
-use crate::{dbg_time, points::{Point, PointInt}};
+use crate::{
+    dbg_time,
+    points::{Point, PointInt},
+};
 
 pub mod base;
-pub mod prepare;
 pub mod screenshot;
 pub mod selection;
-
-pub struct OldWaylandContext {
-    pub connection: Connection,
-}
-
-pub struct OldWaylandApp<S> {
-    globals: GlobalList,
-    event_queue: EventQueue<S>,
-    app: S,
-}
 
 pub struct WaylandAppManager {
     globals: GlobalList,
@@ -276,7 +270,6 @@ impl WaylandAppManager {
             Point::new(width as PointInt, height as PointInt)
         };
 
-
         let shm = Shm::bind(&self.globals, &self.qh).map_err(Error::Shm)?;
         let pool = SlotPool::new(logical_size.x as usize * logical_size.y as usize * 4, &shm)
             .map_err(Error::CreatePool)?;
@@ -300,7 +293,8 @@ impl WaylandAppManager {
         let seat_state = SeatState::new(&self.globals, &self.qh);
         let shape_manager = CursorShapeManager::bind(&self.globals, &self.qh).ok();
 
-        let compositor = CompositorState::bind(&self.globals, &self.qh).map_err(Error::Compositor)?;
+        let compositor =
+            CompositorState::bind(&self.globals, &self.qh).map_err(Error::Compositor)?;
         let layer_shell = LayerShell::bind(&self.globals, &self.qh).map_err(Error::LayerShell)?;
 
         let surface = compositor.create_surface(&self.qh);
@@ -378,10 +372,6 @@ impl WaylandAppManager {
 
         Ok(())
     }
-
-    pub fn draw(&mut self) {
-        self.app.state.on_redraw(&mut self.app.ctx, &self.qh);
-    }
 }
 
 #[derive(Debug)]
@@ -397,80 +387,6 @@ pub enum Error {
     NoOutput,
     NoOutputInfo,
     NoOutputLogicalSize,
-}
-
-impl OldWaylandContext {
-    pub fn new(connection: Connection) -> Self {
-        Self { connection }
-    }
-}
-impl OldWaylandContext {
-    pub fn init_from<T, V>(&self, value: V) -> Result<OldWaylandApp<T>, T::Error>
-    where
-        T: InitFrom<V>
-            + wayland_client::Dispatch<
-                wayland_client::protocol::wl_registry::WlRegistry,
-                wayland_client::globals::GlobalListContents,
-            > + 'static,
-    {
-        let (globals, mut event_queue) =
-            registry_queue_init(&self.connection).expect("failed to initialize queue");
-
-        let app = T::init(&globals, &mut event_queue, value)?;
-        Ok(OldWaylandApp {
-            globals,
-            event_queue,
-            app,
-        })
-    }
-}
-impl<S> OldWaylandApp<S> {
-    /// Destroys event queue and return wrapped app.
-    #[must_use]
-    pub fn into_app(self) -> S {
-        self.app
-    }
-
-    #[inline]
-    pub fn dispatch_once(&mut self) -> Result<DispatchResult, S::Error>
-    where
-        S: DispatchWhile,
-    {
-        self.app.dispatch(&self.globals, &mut self.event_queue)
-    }
-
-    pub fn dispatch_until_done(&mut self) -> Result<(), S::Error>
-    where
-        S: DispatchWhile,
-    {
-        while let DispatchResult::Continue = self.dispatch_once()? {}
-        Ok(())
-    }
-}
-
-pub trait InitFrom<T>: Sized {
-    type Error;
-
-    fn init(
-        globals: &GlobalList,
-        event_queue: &mut EventQueue<Self>,
-        value: T,
-    ) -> Result<Self, Self::Error>;
-}
-
-pub enum DispatchResult {
-    Continue,
-    Done,
-}
-
-pub trait DispatchWhile: Sized {
-    type Error;
-
-    fn dispatch(
-        &mut self,
-        globals: &GlobalList,
-        event_queue: &mut EventQueue<Self>,
-    ) -> Result<DispatchResult, Self::Error>;
 }
 
 impl<U> Dispatch<ZwlrScreencopyManagerV1, U> for WaylandApp {
@@ -576,7 +492,8 @@ impl PointerHandler for WaylandApp {
             let pos = Point::new(event.position.0 as PointInt, event.position.1 as PointInt);
             match event.kind {
                 Enter { serial } => {
-                    self.state.on_mouse_enter(&mut self.ctx, pos, pointer, serial, qh);
+                    self.state
+                        .on_mouse_enter(&mut self.ctx, pos, pointer, serial, qh);
                 }
                 Motion { .. } => {
                     self.state.on_mouse_move(&mut self.ctx, pos, qh);

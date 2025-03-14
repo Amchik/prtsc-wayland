@@ -1,7 +1,4 @@
-use app::{
-    screenshot::ScreenshotApp, selection::SelectionApp, AppState, OldWaylandApp, OldWaylandContext,
-    WaylandAppManager,
-};
+use app::{selection::SelectionApp, AppState, WaylandAppManager};
 use clap::Parser;
 use image::{ImageBuffer, Rgb};
 use iter_tools::Itertools;
@@ -10,7 +7,6 @@ use wayland_client::Connection;
 
 mod app;
 mod dbg_time;
-mod outputs;
 mod points;
 
 #[derive(Parser)]

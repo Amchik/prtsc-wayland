@@ -98,15 +98,6 @@ impl Point {
             Quater::Centre => ByTwoPoints::Point(self),
         }
     }
-
-    /// Returns the non-negative "distance" between two points.
-    /// This function implements a valid metric but is not necessarily Euclidean.
-    /// The distance is zero if and only if the two points are equal.
-    pub fn metric(&self, other: &Self) -> PointInt {
-        // In this project, the Manhattan metric is sufficient
-        // for measuring distances
-        self.x.abs_diff(other.x) + self.y.abs_diff(other.y)
-    }
 }
 
 impl Rectangle {
@@ -121,6 +112,8 @@ impl Rectangle {
     /// Make rectangle by two points. Returns [`None`] if points are same or located in one axis
     /// (so rectangle never degenerate).
     pub fn from_two_points(a: Point, b: Point) -> Option<Self> {
+        // FIXME: я только сейчас обратил, что за пиздец тут написан.
+        // FIXME: rewrite this function to min/max
         match a.quater(&b) {
             Quater::BottomRight => {
                 let width = b.x - a.x;

@@ -10,6 +10,7 @@ panic = "abort"
 
 [dependencies]
 clap = { version = "4.5.23", features = ["derive"] }
+enum_dispatch = "0.3.13"
 image = "0.25.5"
 iter_tools = "0.24.0"
 smithay-client-toolkit = "0.19.2"

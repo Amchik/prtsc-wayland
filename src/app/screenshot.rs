@@ -8,7 +8,7 @@ use wayland_protocols_wlr::screencopy::v1::client::{
 use super::{StatePhase, WaylandApp, WaylandAppState, WaylandAppStateFromPrevious};
 
 pub struct ScreenshotApp {
-    pub(super) image: Option<Box<[u8]>>,
+    pub image: Option<Box<[u8]>>,
     buffer: Option<Buffer>,
     zwlr_screencopy_frame: ZwlrScreencopyFrameV1,
     buffer_format: Option<wl_shm::Format>,

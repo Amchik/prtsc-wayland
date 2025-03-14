@@ -1,4 +1,4 @@
-use app::{selection::SelectionApp, AppState, WaylandAppManager};
+use app::{screenshot::ScreenshotApp, AppState, WaylandAppManager};
 use clap::Parser;
 use image::{ImageBuffer, Rgb};
 use iter_tools::Itertools;
@@ -39,8 +39,11 @@ fn make_screenshot(args: &Args) -> Result<ScreenshotResult, app::Error> {
     mgr.dispatch_until_done()?;
 
     if args.fullscreen {
-        let AppState::SelectionApp(SelectionApp { image, .. }) = mgr.app.state else {
-            unreachable!("next app after base should be screenshot")
+        let AppState::ScreenshotApp(ScreenshotApp {
+            image: Some(image), ..
+        }) = mgr.app.state
+        else {
+            unreachable!("next app after base should be screenshot, image should be present")
         };
         let ctx = mgr
             .app

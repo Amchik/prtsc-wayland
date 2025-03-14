@@ -58,6 +58,17 @@ pub struct SelectionApp {
     state: SelectionState,
 }
 
+impl SelectionApp {
+    /// Returns selected region. If selection being in progress or aborted this function will
+    /// return [`None`].
+    pub fn selected_region(&self) -> Option<Rectangle> {
+        match &self.state {
+            SelectionState::SelectionCompleted(rect) => Some(rect.clone()),
+            _ => None,
+        }
+    }
+}
+
 impl WaylandAppStateFromPrevious for SelectionApp {
     type Previous = super::screenshot::ScreenshotApp;
 

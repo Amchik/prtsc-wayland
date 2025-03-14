@@ -26,9 +26,7 @@ use smithay_client_toolkit::{
     shm::{slot::SlotPool, CreatePoolError, Shm, ShmHandler},
 };
 use wayland_client::{
-    globals::{registry_queue_init, BindError, GlobalError, GlobalList},
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
-    Connection, Dispatch, DispatchError, EventQueue, QueueHandle,
+    globals::{registry_queue_init, BindError, GlobalError, GlobalList}, protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface}, ConnectError, Connection, Dispatch, DispatchError, EventQueue, QueueHandle
 };
 use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1,
@@ -56,12 +54,12 @@ pub struct WaylandAppManager {
     globals: GlobalList,
     event_queue: EventQueue<WaylandApp>,
     qh: QueueHandle<WaylandApp>,
-    app: WaylandApp,
+    pub app: WaylandApp,
 }
 
 pub struct WaylandApp {
-    ctx: WaylandContext,
-    state: AppState,
+    pub ctx: WaylandContext,
+    pub state: AppState,
 }
 
 pub enum WaylandContext {
@@ -395,6 +393,7 @@ pub enum Error {
     CreatePool(CreatePoolError),
     Global(GlobalError),
     Dispatch(DispatchError),
+    Connect(ConnectError),
     NoOutput,
     NoOutputInfo,
     NoOutputLogicalSize,

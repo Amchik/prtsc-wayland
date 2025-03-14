@@ -53,7 +53,9 @@ pub struct WaylandApp {
     pub state: AppState,
 }
 
-pub enum WaylandContext {
+pub struct WaylandContext(WaylandContextKind);
+
+enum WaylandContextKind {
     __Nil,
 
     Base(WaylandContextBase),
@@ -88,55 +90,55 @@ pub struct WaylandContextFull {
 
 impl WaylandContext {
     pub fn base(&self) -> &WaylandContextBase {
-        match self {
-            Self::Base(v) => v,
-            Self::Partial(v) => &v.base,
-            Self::Full(v) => &v.partial.base,
+        match &self.0 {
+            WaylandContextKind::Base(v) => v,
+            WaylandContextKind::Partial(v) => &v.base,
+            WaylandContextKind::Full(v) => &v.partial.base,
 
-            Self::__Nil => unreachable!(),
+            WaylandContextKind::__Nil => unreachable!(),
         }
     }
 
     pub fn base_mut(&mut self) -> &mut WaylandContextBase {
-        match self {
-            Self::Base(v) => v,
-            Self::Partial(v) => &mut v.base,
-            Self::Full(v) => &mut v.partial.base,
+        match &mut self.0 {
+            WaylandContextKind::Base(v) => v,
+            WaylandContextKind::Partial(v) => &mut v.base,
+            WaylandContextKind::Full(v) => &mut v.partial.base,
 
-            Self::__Nil => unreachable!(),
+            WaylandContextKind::__Nil => unreachable!(),
         }
     }
 
     pub fn partial(&self) -> Option<&WaylandContextPartial> {
-        match self {
-            Self::Base(_) => None,
-            Self::Partial(v) => Some(v),
-            Self::Full(v) => Some(&v.partial),
+        match &self.0 {
+            WaylandContextKind::Base(_) => None,
+            WaylandContextKind::Partial(v) => Some(v),
+            WaylandContextKind::Full(v) => Some(&v.partial),
 
-            Self::__Nil => unreachable!(),
+            WaylandContextKind::__Nil => unreachable!(),
         }
     }
 
     pub fn partial_mut(&mut self) -> Option<&mut WaylandContextPartial> {
-        match self {
-            Self::Base(_) => None,
-            Self::Partial(v) => Some(v),
-            Self::Full(v) => Some(&mut v.partial),
+        match &mut self.0 {
+            WaylandContextKind::Base(_) => None,
+            WaylandContextKind::Partial(v) => Some(v),
+            WaylandContextKind::Full(v) => Some(&mut v.partial),
 
-            Self::__Nil => unreachable!(),
+            WaylandContextKind::__Nil => unreachable!(),
         }
     }
 
     pub fn full(&self) -> Option<&WaylandContextFull> {
-        match self {
-            Self::Full(v) => Some(v),
+        match &self.0 {
+            WaylandContextKind::Full(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn full_mut(&mut self) -> Option<&mut WaylandContextFull> {
-        match self {
-            Self::Full(v) => Some(v),
+        match &mut self.0 {
+            WaylandContextKind::Full(v) => Some(v),
             _ => None,
         }
     }
@@ -234,10 +236,10 @@ impl WaylandAppManager {
 
         let mut app = WaylandApp {
             state: AppState::BaseApp(BaseApp),
-            ctx: WaylandContext::Base(WaylandContextBase {
+            ctx: WaylandContext(WaylandContextKind::Base(WaylandContextBase {
                 registry_state,
                 output_state,
-            }),
+            })),
         };
 
         event_queue.roundtrip(&mut app).map_err(Error::Dispatch)?;
@@ -271,17 +273,17 @@ impl WaylandAppManager {
         let pool = SlotPool::new(logical_size.x as usize * logical_size.y as usize * 4, &shm)
             .map_err(Error::CreatePool)?;
 
-        let WaylandContext::Base(base) =
-            std::mem::replace(&mut self.app.ctx, WaylandContext::__Nil)
+        let WaylandContext(WaylandContextKind::Base(base)) =
+            std::mem::replace(&mut self.app.ctx, WaylandContext(WaylandContextKind::__Nil))
         else {
             panic!("attempt to initialize partial context, but it have been already initialized");
         };
-        self.app.ctx = WaylandContext::Partial(WaylandContextPartial {
+        self.app.ctx = WaylandContext(WaylandContextKind::Partial(WaylandContextPartial {
             base,
             logical_size,
             shm,
             pool,
-        });
+        }));
 
         Ok(())
     }
@@ -296,8 +298,8 @@ impl WaylandAppManager {
 
         let surface = compositor.create_surface(&self.qh);
 
-        let WaylandContext::Partial(partial) =
-            std::mem::replace(&mut self.app.ctx, WaylandContext::__Nil)
+        let WaylandContext(WaylandContextKind::Partial(partial)) =
+            std::mem::replace(&mut self.app.ctx, WaylandContext(WaylandContextKind::__Nil))
         else {
             panic!("attempt to initialize full context on non-partial context (uninitialized partial or double-initialized full)");
         };
@@ -316,14 +318,14 @@ impl WaylandAppManager {
         layer.set_size(size.x, size.y);
         layer.commit();
 
-        self.app.ctx = WaylandContext::Full(WaylandContextFull {
+        self.app.ctx = WaylandContext(WaylandContextKind::Full(WaylandContextFull {
             partial,
             seat_state,
             shape_manager,
             keyboard: None,
             pointer: None,
             layer,
-        });
+        }));
 
         Ok(())
     }

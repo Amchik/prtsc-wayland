@@ -6,7 +6,6 @@ use points::{Point, Rectangle};
 use wayland_client::Connection;
 
 mod app;
-mod dbg_time;
 mod points;
 
 #[derive(Parser)]

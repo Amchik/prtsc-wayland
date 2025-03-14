@@ -35,10 +35,7 @@ use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
 };
 
-use crate::{
-    dbg_time,
-    points::{Point, PointInt},
-};
+use crate::points::{Point, PointInt};
 
 pub mod base;
 pub mod screenshot;
@@ -598,9 +595,7 @@ impl CompositorHandler for WaylandApp {
         _surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
-        dbg_time! {
-            self.state.on_redraw(&mut self.ctx, qh);
-        }
+        self.state.on_redraw(&mut self.ctx, qh);
     }
 
     fn surface_enter(

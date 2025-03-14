@@ -32,10 +32,6 @@ something on screen), I added it just for fun.
 
 To exit selection press <kbd>Esc</kbd>. Press it again to exit overlay.
 
-## Problems
-
-- Software rendering...
-
 ## Thanks
 
 - [grim](https://sr.ht/~emersion/grim/) and [slurp](https://github.com/emersion/slurp)

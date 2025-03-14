@@ -145,7 +145,7 @@ impl WaylandContext {
 }
 
 #[enum_dispatch(WaylandAppState)]
-#[allow(clippy::enum_variant_names)] // NOTE: it may removed in past and %App renamed to %
+#[allow(clippy::enum_variant_names)] // NOTE: it may removed in future and %App will renamed to %
 pub enum AppState {
     BaseApp,
     ScreenshotApp,

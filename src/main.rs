@@ -8,7 +8,9 @@ use wayland_client::Connection;
 mod app;
 mod points;
 
+/// Wayland screenshot utility
 #[derive(Parser)]
+#[command(about, version)]
 struct Args {
     /// File to save screenshot
     #[arg(long, short, default_value = "image.png")]

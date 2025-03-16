@@ -197,12 +197,24 @@ impl WaylandAppState for SelectionApp {
             SelectionState::BeginSelection {
                 initial,
                 current,
-                pending: Some(pending),
-            } if current != pending => (initial.clone(), current, pending.clone()),
+                pending: pending @ Some(_),
+            } if Some(current.clone()) != *pending => {
+                let pending = pending.take().expect("matched");
+                let prev = current.clone();
+                *current = pending.clone();
+                (initial.clone(), prev, pending)
+            }
+
+            // Make a full-selection redraw
+            SelectionState::BeginSelection {
+                initial,
+                current,
+                pending: None,
+            } if current != initial => (initial.clone(), initial.clone(), current.clone()),
 
             SelectionState::Waiting => {
                 utils::dim_rect(
-                    Rectangle::new(Point::new(0, 0), width, height),
+                    Rectangle::new(Point::new(0, 0), width - 1, height - 1),
                     canvas,
                     &self.image,
                     width as usize,
@@ -224,33 +236,58 @@ impl WaylandAppState for SelectionApp {
             Some(layer),
         );
 
-        if init.is_same_quater(&pending, previous) {
-            // NOTE: rectangle (prev) -> (pos) is rewriting twice.
-            if let Some(rect) = Rectangle::from_two_points(pending.clone(), previous.clone()) {
+        if init.is_same_quater(&pending, &previous) {
+            // NOTE: In the worst case, a double overwrite of the area (previous) -> (pending)
+            // occurs here. It is assumed that the distance between these two points is small, and
+            // their area is of the second-order smallness. In this case, checking for double
+            // overwrite would be meaningless.
+
+            let df_init_pending_x = init.x.abs_diff(pending.x);
+            let df_init_pending_y = init.y.abs_diff(pending.y);
+            let df_init_previous_x = init.x.abs_diff(previous.x);
+            let df_init_previous_y = init.y.abs_diff(previous.y);
+
+            // Dim rects
+            if df_init_pending_x < df_init_previous_x {
+                let proj_pending_x = Point::new(pending.x, init.y);
+                if let Some(rect) = Rectangle::from_two_points(previous.clone(), proj_pending_x) {
+                    utils::dim_rect(rect, canvas, &self.image, width as usize, Some(layer));
+                }
+            }
+
+            if df_init_pending_y < df_init_previous_y {
+                let proj_pending_y = Point::new(init.x, pending.y);
+                if let Some(rect) = Rectangle::from_two_points(previous.clone(), proj_pending_y) {
+                    utils::dim_rect(rect, canvas, &self.image, width as usize, Some(layer));
+                }
+            }
+
+            // Copy rects
+            if df_init_pending_x > df_init_previous_x {
+                let proj_previous_x = Point::new(previous.x, init.y);
+                if let Some(rect) = Rectangle::from_two_points(pending.clone(), proj_previous_x) {
+                    utils::copy_rect(rect, canvas, &self.image, width as usize, Some(layer));
+                }
+            }
+
+            if df_init_pending_y > df_init_previous_y {
+                let proj_previous_y = Point::new(init.x, previous.y);
+                if let Some(rect) = Rectangle::from_two_points(pending.clone(), proj_previous_y) {
+                    utils::copy_rect(rect, canvas, &self.image, width as usize, Some(layer));
+                }
+            }
+        } else {
+            if let Some(rect) = Rectangle::from_two_points(init.clone(), previous.clone()) {
                 utils::dim_rect(rect, canvas, &self.image, width as usize, Some(layer));
             }
 
-            let axis_x = Point::new(previous.x, init.y);
-            if let Some(rect) = Rectangle::from_two_points(pending.clone(), axis_x) {
-                utils::dim_rect(rect, canvas, &self.image, width as usize, Some(layer));
+            if let Some(rect) = Rectangle::from_two_points(init.clone(), pending.clone()) {
+                utils::copy_rect(rect, canvas, &self.image, width as usize, Some(layer));
             }
-
-            let axis_y = Point::new(init.x, previous.y);
-            if let Some(rect) = Rectangle::from_two_points(pending.clone(), axis_y) {
-                utils::dim_rect(rect, canvas, &self.image, width as usize, Some(layer));
-            }
-        } else if let Some(rect) = Rectangle::from_two_points(init.clone(), previous.clone()) {
-            utils::dim_rect(rect, canvas, &self.image, width as usize, Some(layer));
-        }
-
-        if let Some(rect) = Rectangle::from_two_points(init.clone(), pending.clone()) {
-            utils::copy_rect(rect, canvas, &self.image, width as usize, Some(layer));
         }
 
         utils::fill_crosshair(init, canvas, width, height, Some(layer));
         utils::fill_crosshair(pending.clone(), canvas, width, height, Some(layer));
-
-        *previous = pending;
 
         utils::commit_drawing(layer, buffer, qh);
     }
@@ -286,10 +323,10 @@ mod utils {
         width: usize,
         layer: Option<&LayerSurface>,
     ) {
-        for row in rect.start.y..rect.start.y + rect.height {
+        for row in rect.start.y..=rect.start.y + rect.height {
             let row = width * row as usize * 4;
             let start = row + rect.start.x as usize * 4;
-            let end = start + rect.width as usize * 4;
+            let end = start + (1 + rect.width) as usize * 4;
             canvas[start..end].copy_from_slice(&image[start..end]);
         }
         if let Some(layer) = layer {
@@ -315,8 +352,8 @@ mod utils {
         width: usize,
         layer: Option<&LayerSurface>,
     ) {
-        for col in rect.start.x..(rect.start.x + rect.width) {
-            for row in rect.start.y..(rect.start.y + rect.height) {
+        for col in rect.start.x..=(rect.start.x + rect.width) {
+            for row in rect.start.y..=(rect.start.y + rect.height) {
                 let pos = row as usize * width + col as usize;
                 canvas[pos * 4] = dim_u8(image[pos * 4]);
                 canvas[pos * 4 + 1] = dim_u8(image[pos * 4 + 1]);

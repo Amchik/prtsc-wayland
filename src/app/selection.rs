@@ -164,14 +164,12 @@ impl WaylandAppState for SelectionApp {
             return;
         };
 
-        let rect = Rectangle::from_two_points(initial.clone(), current.clone());
-        let Some(rect) = rect else {
-            // BUG: this code shouldn't panic. Need to set selection state to errnous or at least
-            // aborted/waiting.
-            todo!("set selection state to errnous if rectangle is degenerated")
-        };
-
-        self.state = SelectionState::SelectionCompleted(rect);
+        if let Some(rect) = Rectangle::from_two_points(initial.clone(), current.clone()) {
+            self.state = SelectionState::SelectionCompleted(rect);
+        } else {
+            // assume rectangle without area isn't a valid selection
+            self.state = SelectionState::Waiting;
+        }
     }
 
     /// Called on random redraws and on mouse movement

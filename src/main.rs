@@ -1,6 +1,6 @@
 use app::{screenshot::ScreenshotApp, AppState, WaylandAppManager};
 use clap::Parser;
-use image::{ImageBuffer, Rgb};
+use image::{codecs::png::PngEncoder, ImageBuffer, ImageError, Rgb};
 use iter_tools::Itertools;
 use points::{Point, Rectangle};
 use wayland_client::Connection;
@@ -12,7 +12,7 @@ mod points;
 #[derive(Parser)]
 #[command(about, version)]
 struct Args {
-    /// File to save screenshot
+    /// File to save screenshot (use '-' to output to stdout)
     #[arg(long, short, default_value = "image.png")]
     output: String,
 
@@ -84,6 +84,24 @@ fn make_screenshot(args: &Args) -> Result<ScreenshotResult, app::Error> {
 
         Ok(ScreenshotResult::Selection { image, rect, width })
     }
+}
+
+fn save_image(args: &Args, rect: Rectangle, data: &[u8]) -> Result<(), ImageError> {
+    let buffer = ImageBuffer::<Rgb<u8>, _>::from_raw(rect.width, rect.height, data)
+        .expect("Failed to create ImageBuffer from raw data");
+
+    match args.output.as_str() {
+        "-" => {
+            let encoder = PngEncoder::new(std::io::stdout());
+            buffer.write_with_encoder(encoder)?;
+        }
+        path => {
+            buffer.save(path)?;
+            println!("saved to {}", args.output);
+        }
+    }
+
+    Ok(())
 }
 
 fn main() {
@@ -166,12 +184,7 @@ fn main() {
         data.push(chunk[0]);
     }
 
-    let buffer = ImageBuffer::<Rgb<u8>, _>::from_raw(rect.width, rect.height, &data[..])
-        .expect("Failed to create ImageBuffer from raw data");
-
-    if let Err(e) = buffer.save(&args.output) {
+    if let Err(e) = save_image(&args, rect, &data) {
         eprintln!("failed to save: {e}");
-    } else {
-        println!("saved to {}", args.output);
     }
 }

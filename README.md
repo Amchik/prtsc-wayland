@@ -21,7 +21,7 @@
  Usage: prtsc-wayland [OPTIONS]
 
 Options:
-  -o, --output <OUTPUT>  File to save screenshot [default: image.png]
+  -o, --output <OUTPUT>  File to save screenshot (use '-' to output to stdout) [default: image.png]
   -f, --fullscreen       Do not use region selector
   -h, --help             Print help
 ```

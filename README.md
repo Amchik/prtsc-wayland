@@ -17,13 +17,32 @@
 
  Usage:
  ```console
- $ prtsc-wayland -h
- Usage: prtsc-wayland [OPTIONS]
+$ prtsc-wayland -h
+Wayland screenshot utility
+
+Usage: prtsc-wayland [OPTIONS]
 
 Options:
-  -o, --output <OUTPUT>  File to save screenshot (use '-' to output to stdout) [default: image.png]
-  -f, --fullscreen       Do not use region selector
-  -h, --help             Print help
+  -o, --output <OUTPUT>
+          File to save screenshot (use '-' to output to stdout) [default: image.png]
+  -f, --fullscreen
+          Do not use region selector
+  -s, --selection-only
+          Only make region selection and print it
+  -F, --selection-format <SELECTION_FORMAT>
+          If --selection-only, format of selection output [default: "%x,%y %wx%h%n"]
+  -h, --help
+          Print help
+  -V, --version
+          Print version
+
+Formatting:
+  %x %X The x-coordinate of the selection
+  %y %Y The y-coordinate of the selection
+  %w %W The width of the selection
+  %h %H The height of the selection
+  %o    The name of output
+  %n    Newline char ('\n')
 ```
 
 I don't know what formats are supported, see [docs.rs/image](https://docs.rs/image) if you really
@@ -31,6 +50,8 @@ interested. Fullscreen mode (`-f`) is just default grim behavior (making screens
 something on screen), I added it just for fun.
 
 To exit selection press <kbd>Esc</kbd>. Press it again to exit overlay.
+
+To move region during selection hold <kbd>Space</kbd>.
 
 ## Thanks
 

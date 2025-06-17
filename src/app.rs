@@ -211,6 +211,14 @@ pub trait WaylandAppState {
     ) {
     }
 
+    fn on_key_release(
+        &mut self,
+        _context: &mut WaylandContext,
+        _event: KeyEvent,
+        _qh: &QueueHandle<WaylandApp>,
+    ) {
+    }
+
     fn on_redraw(&mut self, _context: &mut WaylandContext, _qh: &QueueHandle<WaylandApp>) {}
 }
 
@@ -452,11 +460,12 @@ impl KeyboardHandler for WaylandApp {
     fn release_key(
         &mut self,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _event: KeyEvent,
+        event: KeyEvent,
     ) {
+        self.state.on_key_release(&mut self.ctx, event, qh);
     }
 
     fn update_modifiers(

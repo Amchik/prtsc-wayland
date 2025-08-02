@@ -1,4 +1,4 @@
-# 'Build for NixOS'
+# Build for NixOS
  `git clone https://github.com/VOXEL0798/prtsc-wayland.git` + `nix build`
 
 # `prtsc-wayland`

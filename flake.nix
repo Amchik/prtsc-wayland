@@ -32,7 +32,7 @@
       };
     in
     {
-      packages = {
+      packages.${system} = {
         prtsc-wayland = prtsc-wayland;
         default = prtsc-wayland;
       };

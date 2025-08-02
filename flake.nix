@@ -2,7 +2,8 @@
   description = "Screenshot utility for Wayland";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = { self, nixpkgs }:
+  outputs =
+    { self, nixpkgs }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
@@ -10,9 +11,8 @@
         cargo = pkgs.cargo;
         rustc = pkgs.rustc;
       };
-    in
-    {
-      packages.${system}.default = rustPlatform.buildRustPackage {
+
+      prtsc-wayland = rustPlatform.buildRustPackage {
         pname = "prtsc-wayland";
         version = "0.3.0";
         src = ./.;
@@ -30,6 +30,11 @@
           libxkbcommon
         ];
       };
+    in
+    {
+      packages.${system}.default = prtsc-wayland;
+
+      defaultPackage.${system} = prtsc-wayland;
 
       devShells.${system}.default = pkgs.mkShell {
         buildInputs = with pkgs; [
@@ -42,3 +47,4 @@
       };
     };
 }
+

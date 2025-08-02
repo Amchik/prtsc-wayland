@@ -1,5 +1,5 @@
 # Build for NixOS
- `git clone https://github.com/VOXEL0798/prtsc-wayland.git` + `nix build`
+ `git clone https://github.com/VOXEL0798/prtsc-wayland.git` + `nix develop` + `cargo build --release`
 
 # `prtsc-wayland`
 

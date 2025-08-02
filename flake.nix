@@ -32,9 +32,10 @@
       };
     in
     {
-      packages.${system}.default = prtsc-wayland;
-
-      defaultPackage.${system} = prtsc-wayland;
+      packages = {
+        prtsc-wayland = prtsc-wayland;
+        default = prtsc-wayland;
+      };
 
       devShells.${system}.default = pkgs.mkShell {
         buildInputs = with pkgs; [

@@ -3,14 +3,16 @@ use clap::Parser;
 use image::{codecs::png::PngEncoder, ImageBuffer, ImageError, Rgb};
 use iter_tools::Itertools;
 use points::{Point, Rectangle};
+use rect_fmt::RectFmt;
 use wayland_client::Connection;
 
 mod app;
 mod points;
+mod rect_fmt;
 
 /// Wayland screenshot utility
 #[derive(Parser)]
-#[command(about, version)]
+#[command(about, version, after_help = include_str!("../formatting.txt"))]
 struct Args {
     /// File to save screenshot (use '-' to output to stdout)
     #[arg(long, short, default_value = "image.png")]
@@ -19,6 +21,14 @@ struct Args {
     /// Do not use region selector
     #[arg(long, short)]
     fullscreen: bool,
+
+    /// Only make region selection and print it
+    #[arg(long, short)]
+    selection_only: bool,
+
+    /// If --selection-only, format of selection output
+    #[arg(long, short = 'F', default_value = "%x,%y %wx%h%n")]
+    selection_format: String,
 }
 
 enum ScreenshotResult {
@@ -26,6 +36,7 @@ enum ScreenshotResult {
         image: Box<[u8]>,
         rect: Rectangle,
         width: u32,
+        output_name: Option<String>,
     },
     Canceled,
 }
@@ -34,6 +45,14 @@ fn make_screenshot(args: &Args) -> Result<ScreenshotResult, app::Error> {
     let conn = Connection::connect_to_env().map_err(app::Error::Connect)?;
     // Initialize outputs
     let mut mgr = WaylandAppManager::initialize(&conn)?;
+
+    let output_name = {
+        let ctx = mgr.app.ctx.base();
+        ctx.output_state
+            .outputs()
+            .next()
+            .and_then(|o| ctx.output_state.info(&o).and_then(|i| i.name))
+    };
 
     // Make screenshot
     mgr.initialize_partial()?;
@@ -58,6 +77,7 @@ fn make_screenshot(args: &Args) -> Result<ScreenshotResult, app::Error> {
             image,
             width,
             rect: Rectangle::new(Point::new(0, 0), width, height),
+            output_name,
         })
     } else {
         // Make selection
@@ -82,7 +102,12 @@ fn make_screenshot(args: &Args) -> Result<ScreenshotResult, app::Error> {
             .logical_size
             .x;
 
-        Ok(ScreenshotResult::Selection { image, rect, width })
+        Ok(ScreenshotResult::Selection {
+            image,
+            rect,
+            width,
+            output_name,
+        })
     }
 }
 
@@ -107,8 +132,13 @@ fn save_image(args: &Args, rect: Rectangle, data: &[u8]) -> Result<(), ImageErro
 fn main() {
     let args = Args::parse();
 
-    let (image, rect, width) = match make_screenshot(&args) {
-        Ok(ScreenshotResult::Selection { image, rect, width }) => (image, rect, width),
+    let (image, rect, width, output_name) = match make_screenshot(&args) {
+        Ok(ScreenshotResult::Selection {
+            image,
+            rect,
+            width,
+            output_name,
+        }) => (image, rect, width, output_name),
         Ok(ScreenshotResult::Canceled) => {
             eprintln!("selection canceled");
             std::process::exit(1);
@@ -166,6 +196,16 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    if args.selection_only {
+        let fmt = RectFmt {
+            rect,
+            fmt: &args.selection_format,
+            output_name: output_name.as_deref(),
+        };
+        print!("{fmt}");
+        std::process::exit(0);
+    }
 
     // Write Xrgb8888 buffer to rgb vector
     let mut data = Vec::with_capacity(rect.width as usize * rect.height as usize * 4);

@@ -13,15 +13,19 @@ use crate::points::{Point, Rectangle};
 
 use super::{StatePhase, WaylandApp, WaylandAppState, WaylandAppStateFromPrevious, WaylandContext};
 
+struct SelectionData {
+    pub initial: Point,
+    pub current: Point,
+    pub pending: Option<Point>,
+
+    pub is_moving: bool,
+}
+
 #[derive(Default)]
 enum SelectionState {
     #[default]
     Waiting,
-    BeginSelection {
-        initial: Point,
-        current: Point,
-        pending: Option<Point>,
-    },
+    BeginSelection(SelectionData),
     SelectionCompleted(Rectangle),
     Abort,
 }
@@ -98,12 +102,38 @@ impl WaylandAppState for SelectionApp {
         event: KeyEvent,
         qh: &QueueHandle<WaylandApp>,
     ) {
-        if event.keysym == Keysym::Escape {
-            if let SelectionState::Waiting = self.state {
-                self.state = SelectionState::Abort;
-            } else {
-                self.state = SelectionState::Waiting;
-                self.on_redraw(ctx, qh);
+        match event.keysym {
+            Keysym::Escape => {
+                if let SelectionState::Waiting = self.state {
+                    self.state = SelectionState::Abort;
+                } else {
+                    self.state = SelectionState::Waiting;
+                    self.on_redraw(ctx, qh);
+                }
+            }
+
+            Keysym::space => {
+                if let SelectionState::BeginSelection(SelectionData { is_moving, .. }) =
+                    &mut self.state
+                {
+                    *is_moving = true;
+                }
+            }
+
+            _ => (),
+        }
+    }
+
+    fn on_key_release(
+        &mut self,
+        _ctx: &mut WaylandContext,
+        event: KeyEvent,
+        _qh: &QueueHandle<WaylandApp>,
+    ) {
+        if event.keysym == Keysym::space {
+            if let SelectionState::BeginSelection(SelectionData { is_moving, .. }) = &mut self.state
+            {
+                *is_moving = false;
             }
         }
     }
@@ -128,7 +158,7 @@ impl WaylandAppState for SelectionApp {
         pos: Point,
         qh: &QueueHandle<WaylandApp>,
     ) {
-        if let SelectionState::BeginSelection { pending, .. } = &mut self.state {
+        if let SelectionState::BeginSelection(SelectionData { pending, .. }) = &mut self.state {
             *pending = Some(pos);
             self.on_redraw(ctx, qh);
         }
@@ -143,11 +173,13 @@ impl WaylandAppState for SelectionApp {
             return;
         };
 
-        self.state = SelectionState::BeginSelection {
+        self.state = SelectionState::BeginSelection(SelectionData {
             initial: pos.clone(),
             current: pos,
             pending: None,
-        };
+
+            is_moving: false,
+        });
     }
     fn on_mouse_release(
         &mut self,
@@ -155,11 +187,12 @@ impl WaylandAppState for SelectionApp {
         _pos: Point,
         _qh: &QueueHandle<WaylandApp>,
     ) {
-        let SelectionState::BeginSelection {
+        let SelectionState::BeginSelection(SelectionData {
             initial,
             current,
             pending: _,
-        } = &self.state
+            is_moving: _,
+        }) = &self.state
         else {
             return;
         };
@@ -191,24 +224,36 @@ impl WaylandAppState for SelectionApp {
             (canvas, layer, pos.x, pos.y)
         };
 
-        let (init, previous, pending) = match &mut self.state {
-            SelectionState::BeginSelection {
+        let (init, previous, pending, pending_init) = match &mut self.state {
+            SelectionState::BeginSelection(SelectionData {
                 initial,
                 current,
                 pending: pending @ Some(_),
-            } if Some(current.clone()) != *pending => {
+                is_moving,
+            }) if Some(current.clone()) != *pending => {
                 let pending = pending.take().expect("matched");
                 let prev = current.clone();
                 *current = pending.clone();
-                (initial.clone(), prev, pending)
+                let (init, pending_init) = if *is_moving {
+                    let dx = pending.x as i32 - prev.x as i32;
+                    let dy = pending.y as i32 - prev.y as i32;
+                    let prev_init = initial.clone();
+                    let pending_init = Point::new(
+                        initial.x.saturating_add_signed(dx).min(width - 1),
+                        initial.y.saturating_add_signed(dy).min(height - 1),
+                    );
+                    *initial = pending_init.clone();
+                    (prev_init, Some(pending_init))
+                } else {
+                    (initial.clone(), None)
+                };
+                (init, prev, pending, pending_init)
             }
 
             // Make a full-selection redraw
-            SelectionState::BeginSelection {
-                initial,
-                current,
-                pending: None,
-            } if current != initial => (initial.clone(), initial.clone(), current.clone()),
+            SelectionState::BeginSelection(SelectionData {
+                initial, current, ..
+            }) if current != initial => (initial.clone(), initial.clone(), current.clone(), None),
 
             SelectionState::Waiting => {
                 utils::dim_rect(
@@ -225,6 +270,17 @@ impl WaylandAppState for SelectionApp {
             _ => return,
         };
 
+        if pending_init.is_some() {
+            utils::dim_crosshair(
+                init.clone(),
+                canvas,
+                &self.image,
+                width,
+                height,
+                Some(layer),
+            );
+        };
+
         utils::dim_crosshair(
             previous.clone(),
             canvas,
@@ -234,57 +290,29 @@ impl WaylandAppState for SelectionApp {
             Some(layer),
         );
 
-        if init.is_same_quater(&pending, &previous) {
-            // NOTE: In the worst case, a double overwrite of the area (previous) -> (pending)
-            // occurs here. It is assumed that the distance between these two points is small, and
-            // their area is of the second-order smallness. In this case, checking for double
-            // overwrite would be meaningless.
+        utils::update_selection_partial(
+            init.clone(),
+            previous.clone(),
+            pending.clone(),
+            canvas,
+            &self.image,
+            width as usize,
+            Some(layer),
+        );
 
-            let df_init_pending_x = init.x.abs_diff(pending.x);
-            let df_init_pending_y = init.y.abs_diff(pending.y);
-            let df_init_previous_x = init.x.abs_diff(previous.x);
-            let df_init_previous_y = init.y.abs_diff(previous.y);
-
-            // Dim rects
-            if df_init_pending_x < df_init_previous_x {
-                let proj_pending_x = Point::new(pending.x, init.y);
-                if let Some(rect) = Rectangle::from_two_points(previous.clone(), proj_pending_x) {
-                    utils::dim_rect(rect, canvas, &self.image, width as usize, Some(layer));
-                }
-            }
-
-            if df_init_pending_y < df_init_previous_y {
-                let proj_pending_y = Point::new(init.x, pending.y);
-                if let Some(rect) = Rectangle::from_two_points(previous.clone(), proj_pending_y) {
-                    utils::dim_rect(rect, canvas, &self.image, width as usize, Some(layer));
-                }
-            }
-
-            // Copy rects
-            if df_init_pending_x > df_init_previous_x {
-                let proj_previous_x = Point::new(previous.x, init.y);
-                if let Some(rect) = Rectangle::from_two_points(pending.clone(), proj_previous_x) {
-                    utils::copy_rect(rect, canvas, &self.image, width as usize, Some(layer));
-                }
-            }
-
-            if df_init_pending_y > df_init_previous_y {
-                let proj_previous_y = Point::new(init.x, previous.y);
-                if let Some(rect) = Rectangle::from_two_points(pending.clone(), proj_previous_y) {
-                    utils::copy_rect(rect, canvas, &self.image, width as usize, Some(layer));
-                }
-            }
-        } else {
-            if let Some(rect) = Rectangle::from_two_points(init.clone(), previous.clone()) {
-                utils::dim_rect(rect, canvas, &self.image, width as usize, Some(layer));
-            }
-
-            if let Some(rect) = Rectangle::from_two_points(init.clone(), pending.clone()) {
-                utils::copy_rect(rect, canvas, &self.image, width as usize, Some(layer));
-            }
+        if let Some(pending_init) = pending_init.clone() {
+            utils::update_selection_partial(
+                pending.clone(),
+                init.clone(),
+                pending_init,
+                canvas,
+                &self.image,
+                width as usize,
+                Some(layer),
+            );
         }
 
-        utils::fill_crosshair(init, canvas, width, height, Some(layer));
+        utils::fill_crosshair(pending_init.unwrap_or(init), canvas, width, height, Some(layer));
         utils::fill_crosshair(pending.clone(), canvas, width, height, Some(layer));
 
         utils::commit_drawing(layer, buffer, qh);
@@ -302,6 +330,66 @@ mod utils {
         app::WaylandApp,
         points::{Point, Rectangle},
     };
+
+    pub fn update_selection_partial(
+        init: Point,
+        previous: Point,
+        pending: Point,
+        canvas: &mut [u8],
+        image: &[u8],
+        width: usize,
+        layer: Option<&LayerSurface>,
+    ) {
+        if init.is_same_quater(&pending, &previous) {
+            // NOTE: In the worst case, a double overwrite of the area (previous) -> (pending)
+            // occurs here. It is assumed that the distance between these two points is small, and
+            // their area is of the second-order smallness. In this case, checking for double
+            // overwrite would be meaningless.
+
+            let df_init_pending_x = init.x.abs_diff(pending.x);
+            let df_init_pending_y = init.y.abs_diff(pending.y);
+            let df_init_previous_x = init.x.abs_diff(previous.x);
+            let df_init_previous_y = init.y.abs_diff(previous.y);
+
+            // Dim rects
+            if df_init_pending_x < df_init_previous_x {
+                let proj_pending_x = Point::new(pending.x, init.y);
+                if let Some(rect) = Rectangle::from_two_points(previous.clone(), proj_pending_x) {
+                    dim_rect(rect, canvas, image, width, layer);
+                }
+            }
+
+            if df_init_pending_y < df_init_previous_y {
+                let proj_pending_y = Point::new(init.x, pending.y);
+                if let Some(rect) = Rectangle::from_two_points(previous.clone(), proj_pending_y) {
+                    dim_rect(rect, canvas, image, width, layer);
+                }
+            }
+
+            // Copy rects
+            if df_init_pending_x > df_init_previous_x {
+                let proj_previous_x = Point::new(previous.x, init.y);
+                if let Some(rect) = Rectangle::from_two_points(pending.clone(), proj_previous_x) {
+                    copy_rect(rect, canvas, image, width, layer);
+                }
+            }
+
+            if df_init_pending_y > df_init_previous_y {
+                let proj_previous_y = Point::new(init.x, previous.y);
+                if let Some(rect) = Rectangle::from_two_points(pending.clone(), proj_previous_y) {
+                    copy_rect(rect, canvas, image, width, layer);
+                }
+            }
+        } else {
+            if let Some(rect) = Rectangle::from_two_points(init.clone(), previous.clone()) {
+                dim_rect(rect, canvas, image, width, layer);
+            }
+
+            if let Some(rect) = Rectangle::from_two_points(init.clone(), pending.clone()) {
+                copy_rect(rect, canvas, image, width, layer);
+            }
+        }
+    }
 
     pub fn commit_drawing(layer: &LayerSurface, buffer: &Buffer, qh: &QueueHandle<WaylandApp>) {
         let surface = layer.wl_surface();

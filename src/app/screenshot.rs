@@ -1,3 +1,5 @@
+use core::cell::Cell;
+
 use smithay_client_toolkit::shm::slot::Buffer;
 use wayland_client::{globals::GlobalList, protocol::wl_shm, Connection, EventQueue, QueueHandle};
 use wayland_protocols_wlr::screencopy::v1::client::{
@@ -104,22 +106,31 @@ impl WaylandAppState for ScreenshotApp {
                     }
                 };
 
-                // Check for Xrgb8888 format
-                // FIXME: some formats can be supported (like rgbx or rgb) but not YET implemented.
-                // it is a good idea to convert here rgbx/rgb to xrgb.
-                let (Some(wl_shm::Format::Xrgb8888) | Some(wl_shm::Format::Argb8888)) =
-                    self.buffer_format
-                else {
-                    unimplemented!("Got yet unimplemented buffer format {:?}. It is a bug, please report it to github issues", self.buffer_format);
-                };
-
                 let slot = buff.slot();
                 let data = ctx
                     .partial_mut()
                     .expect("screenshot app requires at least partial state")
                     .pool
                     .raw_data_mut(&slot);
-                self.image = Some(Box::from(data));
+                let mut data: Vec<u8> = Vec::from(data);
+
+                // Check for Xrgb8888 format
+                // FIXME: some formats can be supported (like rgbx or rgb) but not YET implemented.
+                // it is a good idea to convert here rgbx/rgb to xrgb.
+                match self.buffer_format {
+                    Some(wl_shm::Format::Xrgb8888) | Some(wl_shm::Format::Argb8888) => (),
+
+                    Some(wl_shm::Format::Xbgr8888) | Some(wl_shm::Format::Abgr8888) => {
+                        let cells = Cell::from_mut(&mut data[..]).as_slice_of_cells();
+                        for w in cells.chunks(4) {
+                            Cell::swap(&w[0], &w[2]);
+                        }
+                    },
+
+                    _ => unimplemented!("Got yet unimplemented buffer format {:?}. It is a bug, please report it to github issues", self.buffer_format),
+                };
+
+                self.image = Some(data.into_boxed_slice());
             }
             _ => {}
         }
